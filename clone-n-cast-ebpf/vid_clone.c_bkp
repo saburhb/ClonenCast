@@ -1,0 +1,57 @@
+#include <bcc/proto.h>
+
+#define ETH_LEN 14
+
+struct out_interface_list
+{
+    u64 out1;
+    u64 out2;
+    u64 counter;
+};
+
+BPF_TABLE("hash", u64, struct out_interface_list, portmap, 1024);
+BPF_TABLE("hash", u64, u64, revport, 1024);
+
+int replicate_forward(struct __sk_buff *skb)
+{
+  u8 *cursor = 0;
+  // Check of ethernet/IP frame.
+  ethernet: {
+    struct ethernet_t *ethernet = cursor_advance(cursor, sizeof(*ethernet));
+
+
+    u64 in_ifindex = skb->ifindex;
+    u64 out_ifindex1;
+    u64 out_ifindex2;
+    u64 count_val;
+    struct out_interface_list* oifl = portmap.lookup(&in_ifindex);
+
+    if(oifl)
+    {
+	out_ifindex1 = oifl->out1;
+	out_ifindex2 = oifl->out2;
+	count_val = oifl->counter;
+    }
+    else
+    {
+        return 1;
+    }
+
+
+    lock_xadd(&oifl->counter, 1);
+
+    bpf_clone_redirect(skb, out_ifindex1, 0);
+    
+    if((count_val % 20) != 0){
+        bpf_clone_redirect(skb, out_ifindex2, 0);
+    }
+
+
+    goto EOP;
+  }
+
+EOP:
+  return 1;
+
+}
+
